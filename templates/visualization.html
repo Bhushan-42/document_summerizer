@@ -70,6 +70,19 @@
       text-align: center;
       padding: 10px;
     }
+    /* Styling for the new text input */
+    #textInput {
+      width: 100%;
+      max-width: 800px;
+      height: 120px;
+      padding: 10px;
+      font-size: 16px;
+      margin-bottom: 15px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      resize: vertical;
+      box-sizing: border-box;
+    }
   </style>
 </head>
 <body>
@@ -86,37 +99,27 @@
     </header>
 
     <main id="visualizationSection">
-      <h2>Visualize Your Excel Data</h2>
-      <p>Upload an Excel file (.xlsx or .xls) to generate a default Bar Chart. You can then switch to Pie Chart or Infograph (A4 layout).</p>
+      <h2>Visualize Your Data</h2>
+      <p>You can either paste structured text data (each line should contain exactly two values separated by a comma, tab, or multiple spaces) or upload an Excel file (.xlsx or .xls). If both are provided, the text takes precedence.</p>
 
-      <div class="limitations">
-        <strong>Important Limitations:</strong>
-        <ul>
-          <li>Only data from the <strong>first sheet</strong> is used.</li>
-          <li>The <strong>first column</strong> is treated as category labels.</li>
-          <li>The <strong>second column</strong> is expected to be numeric values.</li>
-          <li>Bar Chart displays all rows individually.</li>
-          <li>Pie Chart aggregates duplicate categories.</li>
-          <li><strong>Infograph</strong> shows multiple sub-charts on an A4-like page (800×1100 px) in one figure.</li>
-          <li>Complex layouts, merged cells, or formulas might cause errors.</li>
-        </ul>
-      </div>
+      <!-- New Text Input Box -->
+      <textarea id="textInput" name="text" placeholder="Enter your structured text data here (e.g., date, value per line)"></textarea>
 
-      <!-- File Upload -->
-      <div class="input-container" style="margin-top: 20px;">
+      <!-- File Upload Section -->
+      <div class="input-container" style="margin-top: 10px;">
         <input type="file" id="excelUpload" name="file" accept=".xlsx,.xls">
         <button type="button" id="visualizeButton" onclick="uploadAndVisualize()">Visualize</button>
       </div>
 
       <!-- Loading Indicator -->
-      <div id="loadingIndicator">Processing Excel file and generating chart...</div>
+      <div id="loadingIndicator">Processing input and generating chart...</div>
 
       <!-- Results Area -->
       <div id="resultsArea" class="hidden">
         <h3 style="margin-bottom:5px; font-size:1.5rem;">Generated Chart</h3>
         <div id="chartDiv"></div>
 
-        <!-- Toggle control (hidden until we have data) -->
+        <!-- Toggle Control -->
         <div id="chartToggle" class="hidden">
           <label>
             <input type="radio" name="chartSwitch" value="bar" checked> Bar Chart
@@ -127,8 +130,10 @@
           <label style="margin-left: 15px;">
             <input type="radio" name="chartSwitch" value="infograph"> Infograph
           </label>
+          <label style="margin-left: 15px;">
+            <input type="radio" name="chartSwitch" value="line_graph"> Line Graph
+          </label>
         </div>
-
         <p id="errorMessage" class="hidden"></p>
       </div>
     </main>
@@ -139,33 +144,35 @@
   </div>
 
   <script>
-    let chartsData = {}; // Will store bar, pie, infograph JSON
+    let chartsData = {}; // To store JSON for all chart types
 
     async function uploadAndVisualize() {
+      const textInput = document.getElementById('textInput');
       const fileInput = document.getElementById('excelUpload');
       const resultsArea = document.getElementById('resultsArea');
       const chartDiv = document.getElementById('chartDiv');
       const errorMessage = document.getElementById('errorMessage');
       const visualizeButton = document.getElementById('visualizeButton');
       const loadingIndicator = document.getElementById('loadingIndicator');
-      const file = fileInput.files[0];
-
-      if (!file) {
-        alert('Please select an Excel file (.xlsx or .xls).');
-        return;
-      }
-
-      // Simple file-extension check on client side
-      const allowedExtensions = ['.xlsx','.xls'];
-      const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
-      if (!allowedExtensions.includes(fileExtension)) {
-        alert(`File type not allowed. Please upload XLSX or XLS. Detected extension: ${fileExtension}`);
-        return;
-      }
-
+      
       const formData = new FormData();
-      formData.append('file', file);
-
+      
+      if (textInput.value.trim() !== "") {
+        formData.append('text', textInput.value.trim());
+      } else if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        const allowedExtensions = ['.xlsx','.xls'];
+        const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+        if (!allowedExtensions.includes(fileExtension)) {
+          alert(`File type not allowed. Please upload XLSX or XLS. Detected extension: ${fileExtension}`);
+          return;
+        }
+        formData.append('file', file);
+      } else {
+        alert('Please provide input by entering text or uploading an Excel file.');
+        return;
+      }
+      
       visualizeButton.disabled = true;
       visualizeButton.textContent = 'Processing...';
       loadingIndicator.style.display = 'block';
@@ -173,7 +180,7 @@
       errorMessage.classList.add('hidden');
       errorMessage.textContent = '';
       Plotly.purge(chartDiv);
-
+  
       try {
         const response = await fetch('/visualization', { method: 'POST', body: formData });
         let data = null;
@@ -189,15 +196,10 @@
             throw new Error("Received non-JSON response from server.");
           }
         }
-
-        if (response.ok && data && data.bar_chart && data.pie_chart && data.infograph) {
-          // Store all chart JSON objects globally
+        if (response.ok && data && data.bar_chart && data.pie_chart && data.infograph && data.line_graph) {
           chartsData = data;
-
           // Show Bar Chart by default
           Plotly.react(chartDiv, chartsData.bar_chart.data, chartsData.bar_chart.layout);
-
-          // Reveal results area & chart toggle
           resultsArea.classList.remove('hidden');
           document.getElementById('chartToggle').classList.remove('hidden');
         } else {
@@ -208,7 +210,7 @@
         }
       } catch (error) {
         console.error("Upload/Visualization Error:", error);
-        errorMessage.textContent = `Failed to process the file. Error: ${error.message}`;
+        errorMessage.textContent = `Failed to process the input. Error: ${error.message}`;
         errorMessage.classList.remove('hidden');
         resultsArea.classList.add('hidden');
       } finally {
@@ -217,37 +219,35 @@
         loadingIndicator.style.display = 'none';
       }
     }
-
-    // Toggle radio changes => switch chart
-    document.addEventListener('change', (e) => {
+  
+    // Toggle control event listener
+    document.addEventListener('change', function(e) {
       if (e.target.name === "chartSwitch") {
         const chartDiv = document.getElementById('chartDiv');
-
         if (e.target.value === "bar") {
-          // Reset chartDiv to auto size for bar chart
           chartDiv.style.width = "100%";
           chartDiv.style.height = "auto";
           chartDiv.style.marginLeft = "";
           chartDiv.style.marginRight = "";
           Plotly.react(chartDiv, chartsData.bar_chart.data, chartsData.bar_chart.layout);
-
         } else if (e.target.value === "pie") {
-          // Reset chartDiv to auto size for pie chart
           chartDiv.style.width = "100%";
           chartDiv.style.height = "auto";
           chartDiv.style.marginLeft = "";
           chartDiv.style.marginRight = "";
           Plotly.react(chartDiv, chartsData.pie_chart.data, chartsData.pie_chart.layout);
-
         } else if (e.target.value === "infograph") {
-          // A4-like dimension: 800 x 1100 px
           chartDiv.style.width = "800px";
           chartDiv.style.height = "1100px";
-          // Center in container
           chartDiv.style.marginLeft = "auto";
           chartDiv.style.marginRight = "auto";
-
           Plotly.react(chartDiv, chartsData.infograph.data, chartsData.infograph.layout);
+        } else if (e.target.value === "line_graph") {
+          chartDiv.style.width = "100%";
+          chartDiv.style.height = "auto";
+          chartDiv.style.marginLeft = "";
+          chartDiv.style.marginRight = "";
+          Plotly.react(chartDiv, chartsData.line_graph.data, chartsData.line_graph.layout);
         }
       }
     });
