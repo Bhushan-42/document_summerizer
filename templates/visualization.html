@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Excel Data Visualization</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-  <script src='https://cdn.plot.ly/plotly-latest.min.js'></script>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
   <style>
     .hidden { display: none; }
-    #chartDiv { margin-top: 20px; min-height: 400px; }
+    #chartDiv { margin-top: 20px; min-height: 500px; }
     #errorMessage { color: red; margin-top: 10px; white-space: pre-wrap; }
     .limitations { margin-top: 15px; padding: 10px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 4px; }
     .limitations ul { margin-top: 5px; padding-left: 20px; }
@@ -43,6 +43,7 @@
     }
     #chartToggle {
       margin-top: 20px;
+      text-align: center;
     }
   </style>
 </head>
@@ -60,36 +61,40 @@
     </header>
     <main id="visualizationSection">
       <h2>Visualize Your Excel Data</h2>
-      <p>Upload an Excel file (.xlsx or .xls) to generate a bar chart. Once displayed, use the toggle below to switch to a pie chart.</p>
+      <p>Upload an Excel file (.xlsx or .xls) to generate a default Bar Chart. You can then switch to Pie Chart or Infograph.</p>
       <div class="limitations">
         <strong>Important Limitations:</strong>
         <ul>
-          <li>Only data from the <strong>first sheet</strong> is read.</li>
-          <li>The <strong>first column</strong> is expected to contain category labels.</li>
-          <li>The <strong>second column</strong> should contain numerical values.</li>
-          <li>Extra columns are ignored.</li>
-          <li>The bar chart displays individual rows; the pie chart aggregates duplicate categories.</li>
-          <li>Visualization may fail if the second column is not primarily numerical.</li>
+          <li>Only data from the <strong>first sheet</strong> in the Excel file is used.</li>
+          <li>The <strong>first column</strong> is treated as category labels.</li>
+          <li>The <strong>second column</strong> is expected to be numeric values.</li>
           <li>Complex layouts, merged cells, or formulas might cause errors.</li>
+          <li>Infograph uses multiple sub-charts in a single figure with placeholder text.</li>
         </ul>
       </div>
+
       <div class="input-container" style="margin-top: 20px;">
-        <input type="file" id="excelUpload" name="file" accept=".xlsx, .xls, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+        <input type="file" id="excelUpload" name="file" accept=".xlsx, .xls">
         <button type="button" id="visualizeButton" onclick="uploadAndVisualize()">Visualize</button>
       </div>
+
       <div id="loadingIndicator" style="display: none; text-align: center; padding: 10px;">
         Processing Excel file and generating chart...
       </div>
+
       <div id="resultsArea" class="hidden">
-        <h3>Generated Chart</h3>
-        <div id="chartDiv"></div>
-        <!-- Toggle control, initially hidden -->
+        <h3 style="margin-bottom:5px; font-size: 1.5rem;">Generated Infographics</h3>
+        <div id="chartDiv" style="border: 1px solid #ccc; padding: 10px;"></div>
+        <!-- Toggle control, hidden until chart data is received -->
         <div id="chartToggle" class="hidden">
           <label>
             <input type="radio" name="chartSwitch" value="bar" checked> Bar Chart
           </label>
           <label style="margin-left: 15px;">
             <input type="radio" name="chartSwitch" value="pie"> Pie Chart
+          </label>
+          <label style="margin-left: 15px;">
+            <input type="radio" name="chartSwitch" value="infograph"> Infograph
           </label>
         </div>
         <p id="errorMessage" class="hidden"></p>
@@ -99,96 +104,108 @@
       <p>&copy; 2025 Document Summarization & Visualization Project</p>
     </footer>
   </div>
+
   <script>
-    let chartsData = {}; // To store both bar and pie chart JSON
+  let chartsData = {}; // To store bar, pie, and infograph JSON objects
 
-    async function uploadAndVisualize() {
-      const fileInput = document.getElementById('excelUpload');
-      const resultsArea = document.getElementById('resultsArea');
-      const chartDiv = document.getElementById('chartDiv');
-      const errorMessage = document.getElementById('errorMessage');
-      const visualizeButton = document.getElementById('visualizeButton');
-      const loadingIndicator = document.getElementById('loadingIndicator');
-      const file = fileInput.files[0];
+  async function uploadAndVisualize() {
+    const fileInput = document.getElementById('excelUpload');
+    const resultsArea = document.getElementById('resultsArea');
+    const chartDiv = document.getElementById('chartDiv');
+    const errorMessage = document.getElementById('errorMessage');
+    const visualizeButton = document.getElementById('visualizeButton');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const file = fileInput.files[0];
 
-      if (!file) {
-        alert('Please select an Excel file (.xlsx or .xls) to upload.');
-        return;
-      }
-
-      const allowedExtensions = ['.xlsx', '.xls'];
-      const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
-      if (!allowedExtensions.includes(fileExtension)) {
-        alert(`File type not allowed. Please upload XLSX or XLS. Detected extension: ${fileExtension}`);
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append('file', file);
-
-      visualizeButton.disabled = true;
-      visualizeButton.textContent = 'Processing...';
-      loadingIndicator.style.display = 'block';
-      resultsArea.classList.add('hidden');
-      errorMessage.classList.add('hidden');
-      errorMessage.textContent = '';
-      Plotly.purge(chartDiv);
-
-      try {
-        const response = await fetch('/visualization', {
-          method: 'POST',
-          body: formData
-        });
-
-        let data = null;
-        try {
-          data = await response.json();
-        } catch (jsonError) {
-          console.error("Could not parse JSON response:", jsonError);
-          const textResponse = await response.text();
-          console.error("Raw server response:", textResponse);
-          if (!response.ok) {
-            throw new Error(`Server error: ${response.status} ${response.statusText}. Response was not valid JSON.`);
-          } else {
-            throw new Error("Received non-JSON response from server.");
-          }
-        }
-
-        if (response.ok && data && data.bar_chart && data.pie_chart) {
-          chartsData = data; // Store both chart JSON objects globally
-          Plotly.react(chartDiv, chartsData.bar_chart.data, chartsData.bar_chart.layout);
-          resultsArea.classList.remove('hidden');
-          // Unhide toggle control after a successful visualization
-          document.getElementById('chartToggle').classList.remove('hidden');
-        } else {
-          errorMessage.textContent = `Error: ${data?.error || 'An unknown error occurred on the server.'}`;
-          errorMessage.classList.remove('hidden');
-          resultsArea.classList.add('hidden');
-          console.error("Backend Error:", data?.error || 'Unknown error');
-        }
-      } catch (error) {
-        console.error("Upload/Visualization Error:", error);
-        errorMessage.textContent = `Failed to process the file. Error: ${error.message}`;
-        errorMessage.classList.remove('hidden');
-        resultsArea.classList.add('hidden');
-      } finally {
-        visualizeButton.disabled = false;
-        visualizeButton.textContent = 'Visualize';
-        loadingIndicator.style.display = 'none';
-      }
+    if (!file) {
+      alert('Please select an Excel file (.xlsx or .xls) to upload.');
+      return;
     }
 
-    // Add event listener to toggle between bar and pie charts
-    document.addEventListener('change', function(e) {
-      if (e.target.name === "chartSwitch") {
-        const chartDiv = document.getElementById('chartDiv');
-        if (e.target.value === "bar") {
-          Plotly.react(chartDiv, chartsData.bar_chart.data, chartsData.bar_chart.layout);
-        } else if (e.target.value === "pie") {
-          Plotly.react(chartDiv, chartsData.pie_chart.data, chartsData.pie_chart.layout);
+    const allowedExtensions = ['.xlsx', '.xls'];
+    const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+    if (!allowedExtensions.includes(fileExtension)) {
+      alert(`File type not allowed. Please upload XLSX or XLS. Detected extension: ${fileExtension}`);
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    visualizeButton.disabled = true;
+    visualizeButton.textContent = 'Processing...';
+    loadingIndicator.style.display = 'block';
+    resultsArea.classList.add('hidden');
+    errorMessage.classList.add('hidden');
+    errorMessage.textContent = '';
+    Plotly.purge(chartDiv);
+
+    try {
+      const response = await fetch('/visualization', {
+        method: 'POST',
+        body: formData
+      });
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        console.error("Could not parse JSON response:", jsonError);
+        const textResponse = await response.text();
+        console.error("Raw server response:", textResponse);
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status} ${response.statusText}. Response was not valid JSON.`);
+        } else {
+          throw new Error("Received non-JSON response from server.");
         }
       }
-    });
-  </script>
+      if (response.ok && data && data.bar_chart && data.pie_chart && data.infograph) {
+        chartsData = data; // Store all chart JSON objects globally
+        Plotly.react(chartDiv, chartsData.bar_chart.data, chartsData.bar_chart.layout);
+        resultsArea.classList.remove('hidden');
+        // Unhide toggle control after a successful visualization
+        document.getElementById('chartToggle').classList.remove('hidden');
+      } else {
+        errorMessage.textContent = `Error: ${data?.error || 'An unknown error occurred on the server.'}`;
+        errorMessage.classList.remove('hidden');
+        resultsArea.classList.add('hidden');
+        console.error("Backend Error:", data?.error || 'Unknown error');
+      }
+    } catch (error) {
+      console.error("Upload/Visualization Error:", error);
+      errorMessage.textContent = `Failed to process the file. Error: ${error.message}`;
+      errorMessage.classList.remove('hidden');
+      resultsArea.classList.add('hidden');
+    } finally {
+      visualizeButton.disabled = false;
+      visualizeButton.textContent = 'Visualize';
+      loadingIndicator.style.display = 'none';
+    }
+  }
+
+  // Listen for changes to the toggle control to switch between charts.
+  document.addEventListener('change', function(e) {
+    if (e.target.name === "chartSwitch") {
+      const chartDiv = document.getElementById('chartDiv');
+      if (e.target.value === "bar") {
+        // Reset chartDiv dimensions for bar or pie charts.
+        chartDiv.style.width = "100%";
+        chartDiv.style.height = "auto";
+        Plotly.react(chartDiv, chartsData.bar_chart.data, chartsData.bar_chart.layout);
+      } else if (e.target.value === "pie") {
+        chartDiv.style.width = "100%";
+        chartDiv.style.height = "auto";
+        Plotly.react(chartDiv, chartsData.pie_chart.data, chartsData.pie_chart.layout);
+      } else if (e.target.value === "infograph") {
+        // Set fixed dimensions for the A4-style infograph.
+        chartDiv.style.width = "800px";
+        chartDiv.style.height = "1100px";
+        chartDiv.style.marginLeft = "auto";
+        chartDiv.style.marginRight = "auto";
+        Plotly.react(chartDiv, chartsData.infograph.data, chartsData.infograph.layout);
+      }
+    }
+  });
+</script>
+
 </body>
 </html>

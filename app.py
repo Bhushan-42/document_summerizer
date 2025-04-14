@@ -13,11 +13,10 @@ import docx  # Correctly refers to python-docx library
 import pandas as pd       # <-- Add pandas
 import plotly.express as px  # <-- Available if needed
 import plotly.io as pio      # <-- Add Plotly IO for JSON export
-import plotly.graph_objects as go  # <-- Use Graph Objects for complete control
+import plotly.graph_objects as go  # <-- For complete control
 
 # --- Flask App Configuration ---
 UPLOAD_FOLDER = 'uploads'
-# --- UPDATED ALLOWED_EXTENSIONS ---
 ALLOWED_EXTENSIONS = {'pdf', 'docx', 'xlsx', 'xls'}  # <-- Add Excel extensions
 
 if not os.path.exists(UPLOAD_FOLDER):
@@ -164,7 +163,7 @@ def create_pie_chart_from_excel(file_path):
             df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
             if df[y_col].isnull().all():
                 return None, f"The second column ('{y_col}') does not contain numeric data suitable for visualization."
-        # Aggregate by category for the pie chart.
+        # Aggregate by category for pie chart
         df_grouped = df.groupby(x_col, as_index=False)[y_col].sum()
         labels = df_grouped[x_col].tolist()
         values = df_grouped[y_col].tolist()
@@ -184,6 +183,137 @@ def create_pie_chart_from_excel(file_path):
     except Exception as e:
         print(f"Error in create_pie_chart_from_excel: {e}")
         return None, f"An unexpected error occurred: {e}"
+
+# --- Function to Create Infograph from Excel ---
+from plotly.subplots import make_subplots
+
+def create_infograph_from_excel(file_path):
+    """
+    Creates a 2x2 subplot "infographic" with:
+      - top-left: Pie chart
+      - top-right: Horizontal bar chart
+      - bottom-left: Donut chart
+      - bottom-right: Another ring chart
+    """
+    try:
+        df = pd.read_excel(file_path, sheet_name=0)
+        print("[DEBUG] DataFrame loaded (Infograph):")
+        print(df.head())
+
+        if df.empty:
+            return None, "Excel file is empty or has no data in the first sheet."
+        if len(df.columns) < 2:
+            return None, "Excel file needs at least two columns for visualization (Category, Value)."
+
+        x_col = df.columns[0]
+        y_col = df.columns[1]
+
+        # Ensure second column is numeric
+        if not pd.api.types.is_numeric_dtype(df[y_col]):
+            df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
+            if df[y_col].isnull().all():
+                return None, f"The second column ('{y_col}') does not contain numeric data suitable for visualization."
+
+        # Aggregate data for the pie/donut charts
+        df_grouped = df.groupby(x_col, as_index=False)[y_col].sum()
+        categories = df_grouped[x_col].tolist()
+        values = df_grouped[y_col].tolist()
+
+        # Create 2x2 subplots with domain-type subplots for the pie/donut charts
+        fig = make_subplots(
+            rows=2, cols=2,
+            specs=[[{"type": "domain"}, {"type": "xy"}],
+                   [{"type": "domain"}, {"type": "domain"}]],
+            subplot_titles=("Pie Chart", "Bar Chart", "Donut Chart", "Ring Chart"),
+        )
+
+        # --- TOP-LEFT: Pie chart ---
+        fig.add_trace(
+            go.Pie(
+                labels=categories,
+                values=values,
+                textinfo='label+percent',
+                hoverinfo='label+value'
+            ),
+            row=1, col=1
+        )
+
+        # --- TOP-RIGHT: Horizontal bar chart ---
+        # Sort by value descending so largest bars on top
+        df_sorted = df_grouped.sort_values(by=y_col, ascending=False)
+        fig.add_trace(
+            go.Bar(
+                x=df_sorted[y_col],
+                y=df_sorted[x_col],
+                orientation='h',
+                text=df_sorted[y_col],
+                textposition='inside',  # or 'auto', 'outside' if you prefer
+                marker_color='orange',
+            ),
+            row=1, col=2
+        )
+
+        # --- BOTTOM-LEFT: Donut chart (pie with hole) ---
+        fig.add_trace(
+            go.Pie(
+                labels=categories,
+                values=values,
+                hole=0.4,  # creates the "donut" hole
+                textinfo='percent',
+                hoverinfo='label+value'
+            ),
+            row=2, col=1
+        )
+
+        # --- BOTTOM-RIGHT: Another ring chart example ---
+        fig.add_trace(
+            go.Pie(
+                labels=categories,
+                values=values,
+                hole=0.7,   # bigger hole => ring look
+                textinfo='none',  # hide text inside slices
+                hoverinfo='label+value'
+            ),
+            row=2, col=2
+        )
+
+        # Update overall layout
+        fig.update_layout(
+            title_text="INFOGRAPHICS",  # Big title at top
+            title_x=0.5,                # Center title
+            title_font_size=24,
+            margin=dict(l=50, r=50, t=80, b=50),  # More breathing room
+            showlegend=True,   # Pie charts can share a single legend
+            legend=dict(
+                x=0.8, y=1.05,
+                xanchor="center",
+                yanchor="middle",
+                orientation="h"
+            ),
+            # Control subplot spacing
+            grid=dict(rows=2, columns=2),
+        )
+
+        # More fine-tuning for each subplot (optional)
+        #   - shrink bar chart so text has space, or set text to 'auto' if you prefer
+        fig.update_xaxes(
+            showgrid=True, gridcolor='LightGray', row=1, col=2
+        )
+        fig.update_yaxes(
+            automargin=True,  # Let Plotly manage margins
+            row=1, col=2
+        )
+
+        # Convert to JSON
+        chart_json_str = pio.to_json(fig)
+        chart_json_dict = json.loads(chart_json_str)
+        print("Infograph JSON generated successfully.")
+        return chart_json_dict, None
+
+    except Exception as e:
+        print(f"Error in create_infograph_from_excel: {e}")
+        return None, f"An unexpected error occurred: {e}"
+
 
 # --- Routes for HTML Pages ---
 @app.route('/')
@@ -225,17 +355,19 @@ def visualization_page_and_handler():
             print(f"Excel file saved temporarily to: {file_path}")
             bar_chart_json, err1 = create_bar_chart_from_excel(file_path)
             pie_chart_json, err2 = create_pie_chart_from_excel(file_path)
+            infograph_json, err3 = create_infograph_from_excel(file_path)
             os.remove(file_path)
             print(f"Temporary file removed: {file_path}")
-            if err1 or err2:
-                errMsg = err1 if err1 else err2
+            if err1 or err2 or err3:
+                errMsg = err1 or err2 or err3
                 print(f"Visualization generation failed: {errMsg}")
                 return jsonify({"error": errMsg}), 400
             response_data = {
                 "bar_chart": bar_chart_json,
-                "pie_chart": pie_chart_json
+                "pie_chart": pie_chart_json,
+                "infograph": infograph_json
             }
-            print("Visualization JSON for both charts generated successfully.")
+            print("Visualization JSON for all charts generated successfully.")
             return jsonify(response_data)
         except Exception as e:
             print(f"An error occurred during visualization processing: {e}")
