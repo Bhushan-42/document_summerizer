@@ -7,29 +7,32 @@ from ollama import chat
 
 # --- Text Extraction Libraries ---
 import PyPDF2
-import docx  # Correctly refers to python-docx library
+import docx  # Python-docx library
 
 # --- Data Handling & Visualization ---
-import pandas as pd       # <-- Add pandas
-import plotly.express as px  # <-- Available if needed
-import plotly.io as pio      # <-- Add Plotly IO for JSON export
-import plotly.graph_objects as go  # <-- For complete control
+import pandas as pd
+import plotly.express as px
+import plotly.io as pio
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # --- Flask App Configuration ---
 UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'docx', 'xlsx', 'xls'}  # <-- Add Excel extensions
+ALLOWED_EXTENSIONS = {'pdf', 'docx', 'xlsx', 'xls'}
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB upload limit
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB limit
 
-# --- Ollama Configuration ---
+# --- Ollama Configuration (for summarization) ---
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama3.1:8b')
 
-# --- Helper Functions ---
+# -------------------------------------------------
+#                  HELPER FUNCTIONS
+# -------------------------------------------------
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -45,11 +48,12 @@ def extract_text_from_pdf(file_path):
                 except Exception as decrypt_err:
                     print(f"Could not decrypt PDF {file_path}: {decrypt_err}")
                     return "Error reading PDF: File is encrypted and could not be decrypted."
+
             for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-            return text if text else "Could not extract text from PDF (possibly image-based or empty)."
+        return text if text else "Could not extract text from PDF (possibly image-based or empty)."
     except Exception as e:
         print(f"Error reading PDF {file_path}: {e}")
         if "encrypted" in str(e).lower():
@@ -59,7 +63,7 @@ def extract_text_from_pdf(file_path):
 def extract_text_from_docx(file_path):
     try:
         doc = docx.Document(file_path)
-        text = "\n".join([para.text for para in doc.paragraphs if para.text])
+        text = "\n".join(para.text for para in doc.paragraphs if para.text)
         return text if text else "No text found in DOCX document."
     except Exception as e:
         print(f"Error reading DOCX {file_path}: {e}")
@@ -71,6 +75,7 @@ def summarize_text_with_ollama(text_content, max_length=30000):
     if len(text_content) > max_length:
         print(f"Warning: Text length ({len(text_content)}) exceeds limit ({max_length}). Truncating.")
         text_content = text_content[:max_length] + "\n... [Content Truncated]"
+
     summarization_prompt = f"""
 You are an expert text summarizer. Please provide a concise summary of the following document content.
 Focus on the main points, key findings, and overall message. Avoid adding opinions or information not present in the text.
@@ -83,6 +88,7 @@ Document Content:
 
 Concise Summary:
 """
+
     try:
         response = chat(model=OLLAMA_MODEL, messages=[
             {'role': 'user', 'content': summarization_prompt}
@@ -93,26 +99,39 @@ Concise Summary:
         print(f"Error calling Ollama for summarization: {e}")
         return f"Error during summarization: {e}"
 
-# --- Function to Create Bar Chart from Excel ---
+# -------------------------------------------------
+#          CHART-GENERATION FUNCTIONS
+# -------------------------------------------------
+
 def create_bar_chart_from_excel(file_path):
+    """
+    Plots each row individually as a bar.
+    """
     try:
         df = pd.read_excel(file_path, sheet_name=0)
         print("[DEBUG] DataFrame loaded (Bar Chart):")
         print(df.head())
+
         if df.empty:
             return None, "Excel file is empty or has no data in the first sheet."
         if len(df.columns) < 2:
             return None, "Excel file needs at least two columns for visualization (Category, Value)."
+
         x_col = df.columns[0]
         y_col = df.columns[1]
+
+        # Ensure second column is numeric
         if not pd.api.types.is_numeric_dtype(df[y_col]):
             df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
             if df[y_col].isnull().all():
                 return None, f"The second column ('{y_col}') does not contain numeric data suitable for visualization."
+
+        # Force unique x-values to avoid aggregation
         df['unique_id'] = df.index.astype(str) + "_" + df[x_col].astype(str)
         unique_ids = df['unique_id'].tolist()
         categories = df[x_col].tolist()
         values = df[y_col].tolist()
+
         fig = go.Figure(data=[go.Bar(
             x=unique_ids,
             y=values,
@@ -139,6 +158,7 @@ def create_bar_chart_from_excel(file_path):
             bargap=0.2,
             plot_bgcolor='white',
         )
+
         chart_json_str = pio.to_json(fig)
         chart_json_dict = json.loads(chart_json_str)
         print("Bar chart JSON generated successfully.")
@@ -147,26 +167,36 @@ def create_bar_chart_from_excel(file_path):
         print(f"Error in create_bar_chart_from_excel: {e}")
         return None, f"An unexpected error occurred: {e}"
 
-# --- Function to Create Pie Chart from Excel ---
+
 def create_pie_chart_from_excel(file_path):
+    """
+    Aggregates duplicate categories (first column)
+    and plots as a pie chart.
+    """
     try:
         df = pd.read_excel(file_path, sheet_name=0)
         print("[DEBUG] DataFrame loaded (Pie Chart):")
         print(df.head())
+
         if df.empty:
             return None, "Excel file is empty or has no data in the first sheet."
         if len(df.columns) < 2:
             return None, "Excel file needs at least two columns for visualization (Category, Value)."
+
         x_col = df.columns[0]
         y_col = df.columns[1]
+
         if not pd.api.types.is_numeric_dtype(df[y_col]):
             df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
             if df[y_col].isnull().all():
                 return None, f"The second column ('{y_col}') does not contain numeric data suitable for visualization."
-        # Aggregate by category for pie chart
+
+        # Group by category for the pie slices
         df_grouped = df.groupby(x_col, as_index=False)[y_col].sum()
+
         labels = df_grouped[x_col].tolist()
         values = df_grouped[y_col].tolist()
+
         fig = go.Figure(data=[go.Pie(
             labels=labels,
             values=values,
@@ -176,6 +206,7 @@ def create_pie_chart_from_excel(file_path):
         fig.update_layout(
             title=f"Visualization of {x_col} vs {y_col} (Pie Chart)"
         )
+
         chart_json_str = pio.to_json(fig)
         chart_json_dict = json.loads(chart_json_str)
         print("Pie chart JSON generated successfully.")
@@ -184,20 +215,18 @@ def create_pie_chart_from_excel(file_path):
         print(f"Error in create_pie_chart_from_excel: {e}")
         return None, f"An unexpected error occurred: {e}"
 
-# --- Function to Create Infograph from Excel ---
-from plotly.subplots import make_subplots
 
 def create_infograph_from_excel(file_path):
     """
-    Creates a 2x2 subplot "infographic" with:
-      - top-left: Pie chart
-      - top-right: Horizontal bar chart
-      - bottom-left: Donut chart
+    Creates an A4-like, single-page infographic with multiple sub-charts:
+      - top-left: Pie
+      - top-right: Bar
+      - bottom-left: Donut
       - bottom-right: Another ring chart
     """
     try:
         df = pd.read_excel(file_path, sheet_name=0)
-        print("[DEBUG] DataFrame loaded (Infograph):")
+        print("[DEBUG] DataFrame loaded (Infograph - multi-charts):")
         print(df.head())
 
         if df.empty:
@@ -208,18 +237,18 @@ def create_infograph_from_excel(file_path):
         x_col = df.columns[0]
         y_col = df.columns[1]
 
-        # Ensure second column is numeric
+        # Ensure the second column is numeric
         if not pd.api.types.is_numeric_dtype(df[y_col]):
             df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
             if df[y_col].isnull().all():
                 return None, f"The second column ('{y_col}') does not contain numeric data suitable for visualization."
 
-        # Aggregate data for the pie/donut charts
+        # Summaries for pie/donut charts
         df_grouped = df.groupby(x_col, as_index=False)[y_col].sum()
         categories = df_grouped[x_col].tolist()
         values = df_grouped[y_col].tolist()
 
-        # Create 2x2 subplots with domain-type subplots for the pie/donut charts
+        # Create a 2x2 subplot layout to mimic an infographic
         fig = make_subplots(
             rows=2, cols=2,
             specs=[[{"type": "domain"}, {"type": "xy"}],
@@ -227,7 +256,7 @@ def create_infograph_from_excel(file_path):
             subplot_titles=("Pie Chart", "Bar Chart", "Donut Chart", "Ring Chart"),
         )
 
-        # --- TOP-LEFT: Pie chart ---
+        # # #   TOP-LEFT: Pie chart   # # #
         fig.add_trace(
             go.Pie(
                 labels=categories,
@@ -238,8 +267,8 @@ def create_infograph_from_excel(file_path):
             row=1, col=1
         )
 
-        # --- TOP-RIGHT: Horizontal bar chart ---
-        # Sort by value descending so largest bars on top
+        # # #  TOP-RIGHT: Bar chart (horizontal) # # #
+        # Sort descending so biggest bar on top
         df_sorted = df_grouped.sort_values(by=y_col, ascending=False)
         fig.add_trace(
             go.Bar(
@@ -247,75 +276,72 @@ def create_infograph_from_excel(file_path):
                 y=df_sorted[x_col],
                 orientation='h',
                 text=df_sorted[y_col],
-                textposition='inside',  # or 'auto', 'outside' if you prefer
-                marker_color='orange',
+                textposition='auto',  # or 'inside', 'outside'
+                marker_color='orange'
             ),
             row=1, col=2
         )
 
-        # --- BOTTOM-LEFT: Donut chart (pie with hole) ---
+        # # #  BOTTOM-LEFT: Donut chart  # # #
         fig.add_trace(
             go.Pie(
                 labels=categories,
                 values=values,
-                hole=0.4,  # creates the "donut" hole
+                hole=0.4,  # donut
                 textinfo='percent',
                 hoverinfo='label+value'
             ),
             row=2, col=1
         )
 
-        # --- BOTTOM-RIGHT: Another ring chart example ---
+        # # #  BOTTOM-RIGHT: Another ring chart # # #
         fig.add_trace(
             go.Pie(
                 labels=categories,
                 values=values,
-                hole=0.7,   # bigger hole => ring look
-                textinfo='none',  # hide text inside slices
+                hole=0.7,  # bigger hole => ring
+                textinfo='none',  # no text inside slices
                 hoverinfo='label+value'
             ),
             row=2, col=2
         )
 
-        # Update overall layout
+        # # #  Layout: "A4" size (800×1100 px) # # #
         fig.update_layout(
-            title_text="INFOGRAPHICS",  # Big title at top
-            title_x=0.5,                # Center title
+            title_text="INFOGRAPHICS",
+            title_x=0.5,
             title_font_size=24,
-            margin=dict(l=50, r=50, t=80, b=50),  # More breathing room
-            showlegend=True,   # Pie charts can share a single legend
+            width=800,
+            height=1100,
+            margin=dict(l=50, r=50, t=100, b=80),
+            showlegend=True,
             legend=dict(
-                x=0.8, y=1.05,
+                x=0.5,
+                y=-0.05,
                 xanchor="center",
-                yanchor="middle",
+                yanchor="top",
                 orientation="h"
-            ),
-            # Control subplot spacing
-            grid=dict(rows=2, columns=2),
+            )
         )
 
-        # More fine-tuning for each subplot (optional)
-        #   - shrink bar chart so text has space, or set text to 'auto' if you prefer
-        fig.update_xaxes(
-            showgrid=True, gridcolor='LightGray', row=1, col=2
-        )
-        fig.update_yaxes(
-            automargin=True,  # Let Plotly manage margins
-            row=1, col=2
-        )
+        # Extra styling for bar chart subplot
+        fig.update_xaxes(showgrid=True, gridcolor='LightGray', row=1, col=2)
+        fig.update_yaxes(automargin=True, row=1, col=2)
 
         # Convert to JSON
         chart_json_str = pio.to_json(fig)
         chart_json_dict = json.loads(chart_json_str)
-        print("Infograph JSON generated successfully.")
+        print("Infograph multi-chart JSON (A4 style) generated successfully.")
         return chart_json_dict, None
 
     except Exception as e:
         print(f"Error in create_infograph_from_excel: {e}")
         return None, f"An unexpected error occurred: {e}"
 
+# -------------------------------------------------
+#                    FLASK ROUTES
+# -------------------------------------------------
 
-# --- Routes for HTML Pages ---
 @app.route('/')
 def index():
     return render_template('index.html', active_page='home')
@@ -332,36 +358,47 @@ def about():
 def research():
     return render_template('research.html', active_page='research')
 
-# --- Updated: Route for Visualization Page ---
 @app.route('/visualization', methods=['GET', 'POST'])
 def visualization_page_and_handler():
+    """
+    Upload an Excel file. On success, returns JSON with bar_chart, pie_chart, infograph.
+    """
     if request.method == 'GET':
         return render_template('visualization.html', active_page='visualization')
+
     if 'file' not in request.files:
         return jsonify({"error": "No file part in the request"}), 400
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
+
     if file and allowed_file(file.filename):
         original_filename = secure_filename(file.filename)
         file_extension = original_filename.rsplit('.', 1)[1].lower()
+
         if file_extension not in ['xlsx', 'xls']:
             print(f"Incorrect file type for visualization: {original_filename}")
             return jsonify({"error": "File type not allowed for visualization. Please upload XLSX or XLS."}), 400
+
         unique_filename = f"{uuid.uuid4()}.{file_extension}"
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+
         try:
             file.save(file_path)
             print(f"Excel file saved temporarily to: {file_path}")
+
             bar_chart_json, err1 = create_bar_chart_from_excel(file_path)
             pie_chart_json, err2 = create_pie_chart_from_excel(file_path)
             infograph_json, err3 = create_infograph_from_excel(file_path)
+
             os.remove(file_path)
             print(f"Temporary file removed: {file_path}")
+
             if err1 or err2 or err3:
-                errMsg = err1 or err2 or err3
-                print(f"Visualization generation failed: {errMsg}")
-                return jsonify({"error": errMsg}), 400
+                err_msg = err1 or err2 or err3
+                print(f"Visualization generation failed: {err_msg}")
+                return jsonify({"error": err_msg}), 400
+
             response_data = {
                 "bar_chart": bar_chart_json,
                 "pie_chart": pie_chart_json,
@@ -369,6 +406,7 @@ def visualization_page_and_handler():
             }
             print("Visualization JSON for all charts generated successfully.")
             return jsonify(response_data)
+
         except Exception as e:
             print(f"An error occurred during visualization processing: {e}")
             if os.path.exists(file_path):
@@ -378,13 +416,17 @@ def visualization_page_and_handler():
                 except OSError as remove_err:
                     print(f"Error removing file during exception handling: {remove_err}")
             return jsonify({"error": f"An unexpected server error occurred: {e}"}), 500
+
     else:
         print(f"File type not allowed or invalid file: {file.filename}")
         return jsonify({"error": "File type not allowed. Please upload XLSX or XLS."}), 400
 
-# --- API Endpoint for Summarization ---
 @app.route('/summarize', methods=['POST'])
 def handle_summarize():
+    """
+    Summarize text or PDF/DOCX file contents using the Ollama LLM model.
+    """
+    # Summarize raw text
     if 'text' in request.form and request.form['text'].strip():
         text_content = request.form['text'].strip()
         if not text_content:
@@ -396,28 +438,35 @@ def handle_summarize():
         except Exception as e:
             print(f"An error occurred during text summarization: {e}")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
+    # Summarize an uploaded file (PDF or DOCX)
     if 'file' not in request.files:
         return jsonify({"error": "No file part in the request"}), 400
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
+
     if file and allowed_file(file.filename):
         original_filename = secure_filename(file.filename)
         file_extension = original_filename.rsplit('.', 1)[1].lower()
+
         if file_extension not in ['pdf', 'docx']:
             print(f"Incorrect file type for summarization: {original_filename}")
             return jsonify({"error": "File type not allowed for summarization. Please upload PDF or DOCX."}), 400
+
         unique_filename = f"{uuid.uuid4()}.{file_extension}"
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+
         try:
             file.save(file_path)
             print(f"File saved temporarily to: {file_path}")
-            extracted_text = ""
-            summary = ""
+
             if file_extension == 'pdf':
                 extracted_text = extract_text_from_pdf(file_path)
-            elif file_extension == 'docx':
+            else:
                 extracted_text = extract_text_from_docx(file_path)
+
             if extracted_text.startswith("Error reading") or extracted_text.startswith("Could not extract"):
                 summary = f"Text Extraction Failed: {extracted_text}"
             elif not extracted_text or extracted_text.isspace():
@@ -425,9 +474,11 @@ def handle_summarize():
             else:
                 print(f"Extracted text length: {len(extracted_text)}. Summarizing...")
                 summary = summarize_text_with_ollama(extracted_text)
+
             os.remove(file_path)
             print(f"Temporary file removed: {file_path}")
             return jsonify({"summary": summary})
+
         except Exception as e:
             print(f"An error occurred during summarization processing: {e}")
             if os.path.exists(file_path):
@@ -436,6 +487,7 @@ def handle_summarize():
                 except OSError as remove_err:
                     print(f"Error removing file during exception handling: {remove_err}")
             return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
     else:
         print(f"File type not allowed (Summarize Endpoint): {file.filename}")
         return jsonify({"error": "File type not allowed. Please upload PDF or DOCX."}), 400
